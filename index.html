@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Timesheet V28 Smart Sequential</title>
+    <title>Timesheet V31 Auto OT</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -42,7 +42,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useCallback } = React;
 
         // --- ICONS ---
         const Icons = {
@@ -61,13 +61,35 @@
         const OT_TYPES = [
             { code: 'NORMAL', label: 'Giờ công thường' }, 
             { code: 'OT1', label: 'OT1 (17:00-22:00 T2-T7)' },
-            { code: 'OT2', label: 'OT2 (08:00-22:00 CN)' },
+            { code: 'OT2', label: 'OT2 (08:00-22:00 CN/Chiều T7)' },
             { code: 'OT3', label: 'OT3 (08:00-22:00 Lễ)' },
             { code: 'OT4', label: 'OT4 (22:00-06:00 Đêm)' },
-            { code: 'OT5', label: 'OT5 (22:00-06:00 Đêm CN)' },
+            { code: 'OT5', label: 'OT5 (22:00-06:00 Đêm T7/CN)' },
             { code: 'OT6', label: 'OT6 (22:00-06:00 Đêm Lễ)' },
             { code: 'OT7', label: 'OT7 (Đêm có OT trước)' },
         ];
+        
+        // COMMON VIETNAMESE HOLIDAYS (Fixed & Some Variable for 2024-2025)
+        const VN_HOLIDAYS = [
+            '01-01', '04-30', '05-01', '09-02', '09-03', // Fixed (dd-mm format check logic later)
+            '2024-02-08', '2024-02-09', '2024-02-10', '2024-02-11', '2024-02-12', '2024-02-13', '2024-02-14', // Tet 2024
+            '2024-04-18', // Hung Kings 2024
+            '2025-01-28', '2025-01-29', '2025-01-30', '2025-01-31', '2025-02-01', // Tet 2025
+            '2025-04-07', // Hung Kings 2025
+        ];
+
+        const isVietnameseHoliday = (dateStr) => {
+            if (!dateStr) return false;
+            // Check exact full date match (for variable holidays)
+            if (VN_HOLIDAYS.includes(dateStr)) return true;
+            
+            // Check fixed days (regardless of year)
+            const [y, m, d] = dateStr.split('-');
+            const md = `${m}-${d}`;
+            if (['01-01', '04-30', '05-01', '09-02'].includes(md)) return true;
+            
+            return false;
+        };
 
         const HR_WORK_NUMBERS = ['PAID LEAVE', 'UNPAID LEAVE', 'TRAINING-NI', 'TRAINING-EI', 'MEETINGS'];
 
@@ -215,28 +237,21 @@
                 if (confirm('Xóa dòng này?')) setEntries(entries.filter(e => e.id !== id));
             };
 
-            // LOGIC TẠO ENTRY MỚI VÀ MỞ FORM
             const handleNewEntry = () => {
-                // 1. Tìm ngày nhập gần nhất (Latest Date)
-                let defaultD = new Date().toISOString().slice(0, 10); // Mặc định hôm nay
+                let defaultD = new Date().toISOString().slice(0, 10); 
                 
                 if (entries && entries.length > 0) {
-                    // Sort entries by date descending
                     const sorted = [...entries].sort((a,b) => new Date(b.date) - new Date(a.date));
                     const latest = sorted[0];
                     if(latest) {
-                        // Set date = Latest + 1
                         const nextDay = new Date(latest.date);
                         nextDay.setDate(nextDay.getDate() + 1);
                         defaultD = nextDay.toISOString().slice(0, 10);
                     }
                 }
                 
-                setEditingEntry(null); // Mode: Add New
-                // Pass defaultDate to Form via initialData prop trick or explicit prop
-                // Here we just pass it to View='form' state? No, we render EntryForm
-                // Let's pass it as a prop to EntryForm
-                setView('form_new_' + defaultD); // Hacky way to pass date to view state
+                setEditingEntry(null);
+                setView('form_new_' + defaultD);
             };
 
             const handleSaveEntry = (data) => {
@@ -373,7 +388,7 @@
                 <div className="max-w-md mx-auto bg-white min-h-screen shadow-2xl overflow-hidden relative flex flex-col">
                     <header className="bg-blue-800 text-white p-4 sticky top-0 z-50 shadow-lg">
                         <div className="flex justify-between items-center mb-3">
-                            <h1 className="font-bold text-lg flex items-center gap-2">Timesheet <span className="bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded">V28</span></h1>
+                            <h1 className="font-bold text-lg flex items-center gap-2">Timesheet <span className="bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded">V31</span></h1>
                             <button onClick={() => setView('settings')}><Icons.Settings/></button>
                         </div>
                         <div className="bg-blue-900/50 p-2 rounded-lg flex items-center justify-between backdrop-blur-sm border border-blue-700">
@@ -465,39 +480,86 @@
                 return act && act.cat === 'HR';
             }, [formData.activityCode]);
 
-            // SMART AUTOFILL ON LOAD (New Entry Only)
+            // === AUTO-SELECT OT LOGIC ===
+            const determineOTType = useCallback((dateStr, startTime) => {
+                if (!dateStr || !startTime) return 'NORMAL';
+                
+                const date = new Date(dateStr);
+                const day = date.getDay(); // 0 = Sun, 6 = Sat
+                const isHol = isVietnameseHoliday(dateStr);
+                const startHour = parseInt(startTime.split(':')[0]);
+                
+                // NIGHT SHIFT (Starts >= 22:00)
+                if (startHour >= 22) {
+                    if (isHol) return 'OT6'; // Holiday Night
+                    if (day === 0 || day === 6) return 'OT5'; // Sat/Sun Night
+                    return 'OT4'; // Normal Night (Default)
+                }
+
+                // DAY SHIFT
+                if (isHol) return 'OT3'; // Holiday Day
+                
+                if (day === 0) return 'OT2'; // Sunday Day
+                
+                if (day === 6) {
+                    // Saturday: Afternoon (>= 13:00) is OT2
+                    if (startHour >= 13) return 'OT2';
+                    return 'NORMAL'; // Saturday Morning is usually Normal
+                }
+                
+                // Mon-Fri
+                if (startHour >= 17) return 'OT1'; // Normal Day Evening
+                
+                return 'NORMAL';
+            }, []);
+
+            // Auto-run logic when Date or StartTime changes
+            useEffect(() => {
+                // Only auto-update if it's not an edit mode OR if user is changing date/time actively
+                // But for simplicity, we apply logic. User can override manually afterwards if they want.
+                // To avoid overwriting manual changes too aggressively, we could check if otType matches the *previous* auto-calc, 
+                // but here simpler is better: Suggest it.
+                
+                const suggested = determineOTType(formData.date, formData.startTime);
+                
+                // If the current OT type is different from suggested, and we want to be helpful:
+                // We update it. However, if user manually selected something else (e.g. OT7 vs OT4), we should be careful.
+                // For this version, we will Auto-Set it.
+                
+                // SPECIAL CASE: Don't auto-switch if user selected OT7 and suggestion is OT4 (since code can't know history)
+                if (formData.otType === 'OT7' && suggested === 'OT4') return;
+                
+                // Only update if different to prevent loops (though useEffect dep array handles this)
+                if (formData.otType !== suggested) {
+                    // Logic update: If switching TO an OT type, set breakTime = 0 (from V30 logic)
+                    const newBreakTime = (suggested !== 'NORMAL') ? '0' : formData.breakTime;
+                    setFormData(prev => ({ ...prev, otType: suggested, breakTime: newBreakTime }));
+                }
+            }, [formData.date, formData.startTime, determineOTType]);
+
             useEffect(() => { 
                 if (initialData) {
                     setFormData(initialData);
                     const isStandard = ACTIVITY_META.some(opt => opt.id === initialData.activityCode);
                     if (!isStandard) { setCustomCode(initialData.activityCode); setFormData(prev => ({...prev, activityCode: 'OTHER'})); }
                 } else {
-                    // Find info from the day BEFORE this new date (defaultDate - 1)
-                    // NOTE: This must be consistent with handleDateChange
                     fillFromDate(defaultDate);
                 }
-            }, [initialData]); // Only run on mount/initialData change
+            }, [initialData]); 
 
             const fillFromDate = (targetDate) => {
                  if (!entries || entries.length === 0) {
-                    // No history -> Default 1110, empty project
                     setFormData(prev => ({ ...prev, projectName: '', workNumber: '', activityCode: '1110' }));
                     return;
                  }
-
-                 // Try to find entry for (targetDate - 1 day)
                  const current = new Date(targetDate);
                  current.setDate(current.getDate() - 1);
                  const prevDateStr = current.toISOString().slice(0, 10);
-
                  let sourceEntry = entries.find(e => e.date === prevDateStr);
-
-                 // If not found yesterday, find the LATEST entry in history
                  if (!sourceEntry) {
                     const sorted = [...entries].sort((a,b) => new Date(b.date) - new Date(a.date));
                     sourceEntry = sorted[0];
                  }
-
                  if (sourceEntry) {
                     setFormData(prev => ({
                         ...prev,
@@ -505,14 +567,12 @@
                         workNumber: sourceEntry.workNumber,
                         activityCode: sourceEntry.activityCode || '1110'
                     }));
-                    // Handle custom code in autofill
                     const isStandard = ACTIVITY_META.some(opt => opt.id === sourceEntry.activityCode);
                     if (!isStandard && sourceEntry.activityCode !== 'OTHER') {
                         setCustomCode(sourceEntry.activityCode);
                         setFormData(prev => ({...prev, activityCode: 'OTHER'}));
                     }
                  } else {
-                    // No history at all
                     setFormData(prev => ({ ...prev, projectName: '', workNumber: '', activityCode: '1110' }));
                  }
             };
@@ -520,9 +580,27 @@
             const handleDateChange = (e) => {
                 const newDate = e.target.value;
                 setFormData(prev => ({ ...prev, date: newDate }));
-                if (!initialData) {
-                    fillFromDate(newDate);
+                if (!initialData) fillFromDate(newDate);
+            };
+
+            const handleActivityCodeChange = (e) => {
+                const code = e.target.value;
+                let newData = { ...formData, activityCode: code };
+                if (code === '6090') {
+                    newData.startTime = '';
+                    newData.endTime = '';
+                    newData.breakTime = '0';
                 }
+                setFormData(newData);
+            };
+
+            const handleOtChange = (e) => {
+                const type = e.target.value;
+                let newData = { ...formData, otType: type };
+                if (type !== 'NORMAL') {
+                    newData.breakTime = '0';
+                }
+                setFormData(newData);
             };
 
             const handleProjectNameSearch = (val) => {
@@ -565,12 +643,19 @@
                             <div><label className="text-xs font-bold text-slate-500">NGHỈ</label><input type="number" step="0.5" value={formData.breakTime} onChange={e=>setFormData({...formData, breakTime:e.target.value})} className="w-full border p-2 rounded-lg text-center"/></div>
                         </div>
                         <div><label className="text-xs font-bold text-slate-500">TRỰC (STANDBY)</label><input type="number" step="0.5" value={formData.dutyHour} onChange={e=>setFormData({...formData, dutyHour:e.target.value})} className="w-full border p-3 rounded-lg"/></div>
-                        <div><label className="text-xs font-bold text-slate-500">LOẠI GIỜ</label><select value={formData.otType} onChange={e=>setFormData({...formData, otType:e.target.value})} className="w-full border p-3 rounded-lg bg-white">{OT_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</select></div>
+                        
+                        <div>
+                            <label className="text-xs font-bold text-slate-500">LOẠI GIỜ (Tự động đề xuất)</label>
+                            <select value={formData.otType} onChange={handleOtChange} className="w-full border p-3 rounded-lg bg-white">
+                                {OT_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
+                            </select>
+                            {isVietnameseHoliday(formData.date) && <p className="text-xs text-red-500 mt-1">* Phát hiện ngày lễ VN: {formData.date}</p>}
+                        </div>
                         
                         <div className="pt-2 border-t space-y-3">
                             <div>
                                 <label className="text-xs font-bold text-slate-500">MÃ CÔNG VIỆC</label>
-                                <select value={formData.activityCode} onChange={e=>setFormData({...formData, activityCode:e.target.value})} className="w-full border p-3 rounded-lg font-bold text-blue-900">
+                                <select value={formData.activityCode} onChange={handleActivityCodeChange} className="w-full border p-3 rounded-lg font-bold text-blue-900">
                                     {ACTIVITY_META.map(opt => <option key={opt.id} value={opt.id}>{opt.desc}</option>)}
                                     <option value="OTHER">Khác</option>
                                 </select>
