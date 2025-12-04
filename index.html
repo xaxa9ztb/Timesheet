@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Timesheet V34 Extended Holidays</title>
+    <title>Timesheet V35 Fix Date</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -79,12 +79,12 @@
             // 2025
             '2025-01-28', '2025-01-29', '2025-01-30', '2025-01-31', '2025-02-01', // Tet 2025
             '2025-04-07', // Hung Kings 2025
-            // 2026 (NEW)
-            '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20', // Tet 2026 (29 Dec -> 4 Jan)
-            '2026-04-26', '2026-04-27', // Hung Kings 2026 (10/3 Lunar is Sun 26/4, observed Mon 27/4)
-            // 2027 (NEW)
-            '2027-02-05', '2027-02-06', '2027-02-07', '2027-02-08', '2027-02-09', // Tet 2027 (29 Dec -> 4 Jan)
-            '2027-04-16', // Hung Kings 2027 (10/3 Lunar is Fri 16/4)
+            // 2026
+            '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20', // Tet 2026
+            '2026-04-26', '2026-04-27', // Hung Kings 2026
+            // 2027
+            '2027-02-05', '2027-02-06', '2027-02-07', '2027-02-08', '2027-02-09', // Tet 2027
+            '2027-04-16', // Hung Kings 2027
         ];
 
         const isVietnameseHoliday = (dateStr) => {
@@ -136,13 +136,26 @@
         const ACTIVITY_OPTIONS = ACTIVITY_META.map(a => ({ id: a.id, label: a.desc, cat: a.cat }));
         ACTIVITY_OPTIONS.push({ id: 'OTHER', label: 'Khác (Nhập tay code)', cat: 'OTHER' });
 
+        // --- FIXED FUNCTION: MANUAL DATE STRING CONSTRUCTION ---
+        const toLocalISOString = (date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        };
+
         const getSalaryPeriod = (monthStr) => {
             if(!monthStr) return { start: '', end: '', label: '' };
             const [year, month] = monthStr.split('-').map(Number);
+            
+            // Salary Period: 16th Prev Month -> 15th Current Month
+            // Use local dates, avoid UTC conversion
             const startDate = new Date(year, month - 2, 16);
-            const startDateStr = startDate.toISOString().slice(0, 10);
             const endDate = new Date(year, month - 1, 15);
-            const endDateStr = endDate.toISOString().slice(0, 10);
+            
+            const startDateStr = toLocalISOString(startDate); // FIXED
+            const endDateStr = toLocalISOString(endDate);     // FIXED
+            
             const formatDate = (d) => `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
             return { start: startDateStr, end: endDateStr, label: `${formatDate(startDate)} - ${formatDate(endDate)}` };
         };
@@ -197,6 +210,7 @@
 
             const period = useMemo(() => getSalaryPeriod(currentMonth), [currentMonth]);
             const monthlyEntries = useMemo(() => {
+                // IMPORTANT: String comparison works correctly for YYYY-MM-DD
                 return entries.filter(e => e.date >= period.start && e.date <= period.end)
                               .sort((a,b) => new Date(b.date) - new Date(a.date)); 
             }, [entries, period]);
@@ -407,7 +421,7 @@
                 <div className="max-w-md mx-auto bg-white min-h-screen shadow-2xl overflow-hidden relative flex flex-col">
                     <header className="bg-blue-800 text-white p-4 sticky top-0 z-50 shadow-lg">
                         <div className="flex justify-between items-center mb-3">
-                            <h1 className="font-bold text-lg flex items-center gap-2">Timesheet <span className="bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded">V34</span></h1>
+                            <h1 className="font-bold text-lg flex items-center gap-2">Timesheet <span className="bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded">V35</span></h1>
                             <button onClick={() => setView('settings')}><Icons.Settings/></button>
                         </div>
                         <div className="bg-blue-900/50 p-2 rounded-lg flex items-center justify-between backdrop-blur-sm border border-blue-700">
@@ -716,3 +730,5 @@
     </script>
 </body>
 </html>
+
+
